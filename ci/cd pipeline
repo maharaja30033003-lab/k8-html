@@ -1,0 +1,457 @@
+GitHub
+   ↓
+GitHub Actions
+   ↓
+Self-hosted Runner on k8-m1
+   ↓
+Podman/Docker-compatible CLI
+   ↓
+Docker Hub
+   ↓
+kubectl
+   ↓
+Kubernetes
+   ↓
+2 HTML Pods
+
+Below is the clean future-reference procedure, without all the troubleshooting/confusion we went through.
+
+Kubernetes HTML CI/CD — Complete Steps
+1. Kubernetes cluster
+
+You have:
+
+k8-m1       Control Plane    10.0.0.4
+k8-worker   Worker           10.0.0.5
+
+Verify:
+
+kubectl get nodes
+
+Expected:
+
+NAME        STATUS   ROLES
+k8-m1       Ready    control-plane
+k8-worker   Ready    <none>
+2. Create the HTML application
+
+On your laptop:
+
+k8-html/
+├── Dockerfile
+├── index.html
+├── k8/
+│   └── deployment.yml
+└── .github/
+    └── workflows/
+        └── docker-build.yml
+Dockerfile
+FROM nginx:alpine
+
+COPY index.html /usr/share/nginx/html/index.html
+index.html
+
+Your simple HTML page.
+
+3. Kubernetes manifest
+
+File:
+
+k8/deployment.yml
+
+Use:
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: html-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: html-app
+  template:
+    metadata:
+      labels:
+        app: html-app
+    spec:
+      containers:
+        - name: nginx
+          image: maharaja30033003/k8-html:v1
+          ports:
+            - containerPort: 80
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: html-service
+spec:
+  type: NodePort
+  selector:
+    app: html-app
+  ports:
+    - port: 80
+      targetPort: 80
+      nodePort: 30080
+
+Notice the file is:
+
+k8/deployment.yml
+
+not
+
+deployment.yml
+4. GitHub repository
+
+Push the project:
+
+git add .
+git commit -m "Initial HTML application"
+git push
+
+Repository:
+
+maharaja30033003-lab/k8-html
+5. Docker Hub authentication
+
+Create Docker Hub repository:
+
+maharaja30033003/k8-html
+
+Create a Docker Hub Personal Access Token (PAT).
+
+Do not put the password/PAT directly inside the workflow.
+
+6. GitHub Secrets
+
+Go to:
+
+GitHub repository → Settings → Secrets and variables → Actions
+
+Create:
+
+DOCKER_USERNAME
+DOCKER_PASSWORD
+
+Values:
+
+DOCKER_USERNAME = your Docker Hub username
+DOCKER_PASSWORD = Docker Hub PAT
+7. Self-hosted GitHub Actions runner
+
+Because your Kubernetes cluster is on a private network, GitHub-hosted runners cannot directly reach your Kubernetes API.
+
+Therefore you installed a:
+
+Self-hosted GitHub Actions Runner
+
+on:
+
+k8-m1
+
+The runner is:
+
+/home/githubrunner/actions-runner
+8. How the private Kubernetes server connects to GitHub
+
+This is important.
+
+Your Kubernetes master does not need to be publicly exposed.
+
+The connection is:
+
+                 Internet
+                    │
+                    │ HTTPS outbound
+                    ▼
+              GitHub Actions
+                    ▲
+                    │
+                    │ persistent connection
+                    │
+             ┌──────┴──────┐
+             │    k8-m1    │
+             │             │
+             │ Self-hosted │
+             │   Runner    │
+             └──────┬──────┘
+                    │
+                    │ kubectl
+                    ▼
+               Kubernetes
+
+The runner on k8-m1 makes an outbound connection to GitHub.
+
+GitHub does not need to initiate an inbound connection to your private master.
+
+That's why your private Kubernetes network can work with GitHub Actions.
+
+9. Configure the self-hosted runner
+
+On k8-m1:
+
+su - githubrunner
+
+Go to:
+
+cd /home/githubrunner/actions-runner
+
+If configuring a new runner:
+
+./config.sh
+
+Use your repository URL:
+
+https://github.com/maharaja30033003-lab/k8-html
+
+Use the registration token generated from:
+
+GitHub → Settings → Actions → Runners → New self-hosted runner
+
+For the prompts:
+
+Runner group:
+ENTER
+
+Runner name:
+ENTER
+
+which uses:
+
+k8-m1
+
+Additional labels:
+
+ENTER
+
+Work folder:
+
+_work
+10. Start the runner
+
+As githubrunner:
+
+cd /home/githubrunner/actions-runner
+./run.sh
+
+You should see:
+
+Connected to GitHub
+
+Current runner version: '2.336.0'
+
+Listening for Jobs
+
+Leave this process running.
+
+GitHub Actions uses:
+
+runs-on: self-hosted
+
+Therefore the job executes on k8-m1.
+
+11. Docker requirement on k8-m1
+
+Your AlmaLinux system uses Podman.
+
+You installed:
+
+podman
+podman-docker
+
+Therefore:
+
+docker --version
+
+returns something similar to:
+
+Emulate Docker CLI using podman
+podman version 5.8.2
+
+That's okay for this lab.
+
+Test as githubrunner:
+
+docker --version
+
+and:
+
+docker ps
+
+The important point is that the GitHub runner user must be able to execute docker.
+
+12. GitHub Actions workflow
+
+File:
+
+.github/workflows/docker-build.yml
+
+Use:
+
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  docker:
+    runs-on: self-hosted
+
+    steps:
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build Docker image
+        run: |
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/k8-html:v1 .
+
+      - name: Push Docker image
+        run: |
+          docker push ${{ secrets.DOCKER_USERNAME }}/k8-html:v1
+
+      - name: Deploy to Kubernetes
+        run: |
+          kubectl apply -f k8/deployment.yml
+          kubectl rollout status deployment/html-app
+          kubectl get pods -o wide
+          kubectl get service html-service
+13. Push workflow
+
+From your laptop:
+
+git add .
+git commit -m "Add CI CD pipeline"
+git push
+
+GitHub automatically starts the workflow.
+
+14. What happens automatically
+CI
+
+GitHub Actions first:
+
+Checkout source code
+        ↓
+Docker login
+        ↓
+docker build
+        ↓
+docker push
+
+Image goes to:
+
+Docker Hub
+maharaja30033003/k8-html:v1
+CD
+
+Then:
+
+kubectl apply -f k8/deployment.yml
+
+Kubernetes creates:
+
+Deployment
+   ↓
+ReplicaSet
+   ↓
+2 Pods
+15. Verify deployment
+
+On k8-m1:
+
+kubectl get pods
+
+You now have:
+
+NAME                        READY   STATUS    RESTARTS
+html-app-6fbcbc7d54-fn5gh   1/1     Running   0
+html-app-6fbcbc7d54-wmbjx   1/1     Running   0
+
+Exactly what we wanted. ✅
+
+Check deployment:
+
+kubectl get deployment
+
+Check service:
+
+kubectl get svc
+
+You should see:
+
+html-service    NodePort    ...    80:30080/TCP
+16. Current architecture
+
+Your complete lab is now:
+
+                     ┌──────────────────┐
+                     │     GitHub       │
+                     │                  │
+                     │ Source Code      │
+                     │ GitHub Actions   │
+                     └────────┬─────────┘
+                              │
+                       HTTPS outbound
+                              │
+                              ▼
+                 ┌───────────────────────┐
+                 │       k8-m1           │
+                 │                       │
+                 │ Self-hosted Runner    │
+                 │ Docker/Podman         │
+                 │ kubectl               │
+                 └───────────┬───────────┘
+                             │
+                       Kubernetes API
+                             │
+                             ▼
+                 ┌───────────────────────┐
+                 │     Kubernetes        │
+                 │                       │
+                 │     Deployment        │
+                 │          │            │
+                 │       ReplicaSet      │
+                 │        /      \        │
+                 │      Pod      Pod      │
+                 │       │        │       │
+                 │      nginx   nginx     │
+                 └───────────┬───────────┘
+                             │
+                          NodePort
+                          :30080
+                             │
+                             ▼
+                         HTML Page
+One important distinction
+
+You currently have CI/CD working, but external Internet access to the HTML page is a separate networking step.
+
+Right now:
+
+GitHub → Runner → Kubernetes → Pods
+
+is working.
+
+The next stage would be:
+
+Internet
+   ↓
+Public IP / Load Balancer
+   ↓
+Kubernetes Service
+   ↓
+HTML Pods
+
+Since your Kubernetes nodes are on a private network, don't expose the Kubernetes API itself to the Internet. For production-style architecture, we'd normally put a public load balancer/reverse proxy in front of the application rather than making the master node public.
+
+This is a good point to stop and save this as your baseline CI/CD lab.
