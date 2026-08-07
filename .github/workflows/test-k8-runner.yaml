@@ -1,0 +1,12 @@
+name: Test Kubernetes Runner
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: self-hosted
+
+    steps:
+      - name: Test Kubernetes
+        run: kubectl get nodes
