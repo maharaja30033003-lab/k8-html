@@ -1,0 +1,109 @@
+                         INTERNET
+                            │
+                            │ HTTP :80
+                            ▼
+                ┌─────────────────────────┐
+                │   AZURE PUBLIC IP       │
+                │   20.15.171.215         │
+                └────────────┬────────────┘
+                             │
+                             ▼
+                ┌─────────────────────────┐
+                │   AZURE LOAD BALANCER   │
+                │                         │
+                │ Frontend: Public IP     │
+                │ Backend Pool: K8 Nodes  │
+                │ LB Rule: TCP 80         │
+                └────────────┬────────────┘
+                             │
+                   ┌─────────┴─────────┐
+                   │                   │
+                   ▼                   ▼
+          ┌────────────────┐   ┌────────────────┐
+          │     k8-m1      │   │   k8-worker    │
+          │   10.0.0.4     │   │   10.0.0.5     │
+          │                │   │                │
+          │ Control Plane  │   │ Worker Node    │
+          │                │   │                │
+          │ kube-apiserver │   │ nginx-ingress  │
+          │ etcd           │   │ NodePort       │
+          │ scheduler      │   │ :31347         │
+          │ controller mgr │   │                │
+          └────────────────┘   └───────┬────────┘
+                                       │
+                                       ▼
+                            ┌────────────────────┐
+                            │ NGINX INGRESS      │
+                            │ Controller         │
+                            │                    │
+                            │ Pod: 192.168.125.76│
+                            └──────────┬─────────┘
+                                       │
+                                       ▼
+                            ┌────────────────────┐
+                            │ html-ingress       │
+                            │                    │
+                            │ Host: html.local   │
+                            │ Path: /             │
+                            └──────────┬─────────┘
+                                       │
+                                       ▼
+                            ┌────────────────────┐
+                            │ html-service       │
+                            │ ClusterIP :80      │
+                            └──────────┬─────────┘
+                                       │
+                              ┌────────┴────────┐
+                              ▼                 ▼
+                       ┌─────────────┐   ┌─────────────┐
+                       │ HTML Pod    │   │ HTML Pod    │
+                       │ .70:80      │   │ .69:80      │
+                       └─────────────┘   └─────────────┘
+
+
+       ═════════════════════════════════════════════════════
+                         CALICO NETWORK
+       ═════════════════════════════════════════════════════
+
+                    Pod CIDR: 192.168.0.0/16
+                              │
+                 ┌────────────┴────────────┐
+                 │                         │
+                 ▼                         ▼
+       k8-m1 Pod Network          k8-worker Pod Network
+       192.168.167.192/26         192.168.125.64/26
+
+              Calico IPIP / tunl0
+The important final traffic flow
+
+Chrome → Azure Load Balancer → Kubernetes NodePort → NGINX Ingress → Service → Pods
+
+Chrome
+  │
+  │ http://20.15.171.215
+  ▼
+Azure Public IP
+  │
+  ▼
+Azure Load Balancer
+  │
+  ▼
+K8 Node :31347
+  │
+  ▼
+NGINX Ingress Controller
+  │
+  │ Host: html.local
+  ▼
+html-ingress
+  │
+  ▼
+html-service :80
+  │
+  ├────────► HTML Pod 192.168.125.70:80
+  │
+  └────────► HTML Pod 192.168.125.69:80
+
+And yes, the Azure NSG rule we added was for TCP 31347, because the Azure Load Balancer ultimately needed to reach the Kubernetes NodePort.
+
+The earlier webhook timeout was a separate Kubernetes control-plane/networking issue and is not part of the normal application request path.
