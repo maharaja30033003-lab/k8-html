@@ -1,0 +1,103 @@
+We used the self-hosted runner because of how we designed your CI/CD lab.
+
+In our setup
+                 GitHub
+                   │
+             GitHub Actions
+                   │
+                   ▼
+        ┌─────────────────────┐
+        │ Self-hosted Runner  │
+        │      k8-m1           │
+        └──────────┬──────────┘
+                   │
+          Docker build/push
+                   │
+                   ▼
+              Docker Hub
+                   │
+                   │ kubectl apply
+                   ▼
+        ┌─────────────────────┐
+        │ Kubernetes Cluster  │
+        │                     │
+        │ k8-m1  +  k8-worker │
+        └─────────────────────┘
+Why did we choose self-hosted?
+
+Your Kubernetes cluster is running on your own Azure VMs, and we installed the GitHub runner on k8-m1.
+
+The runner gives GitHub Actions a machine that can directly execute:
+
+docker build
+docker push
+kubectl apply
+kubectl get pods
+
+So the runner is basically the worker machine for GitHub Actions.
+
+Could we use GitHub-hosted runner instead?
+
+Yes, absolutely.
+
+You could use:
+
+runs-on: ubuntu-latest
+
+instead of:
+
+runs-on: self-hosted
+
+Then GitHub gives you a temporary Ubuntu VM.
+
+But there is an important difference:
+
+GitHub-hosted runner
+       │
+       │ Internet
+       ▼
+   Your K8 cluster
+
+Your Kubernetes API needs to be reachable from that runner.
+
+With our self-hosted runner:
+
+GitHub
+   │
+   │ job
+   ▼
+k8-m1 runner
+   │
+   │ private network
+   ▼
+Kubernetes API
+
+That's why self-hosted is useful for private Kubernetes clusters.
+
+In your lab
+
+We put the runner on k8-m1 mainly to learn the real-world pattern:
+
+GitHub → CI/CD runner → private Kubernetes cluster
+
+The runner itself is not part of Kubernetes.
+
+Think of it this way:
+
+Component	Purpose
+Kubernetes	Runs your application
+NGINX Ingress	Receives application traffic
+Azure Load Balancer	Exposes the cluster
+Docker Hub	Stores container images
+GitHub Actions	Automates CI/CD
+Self-hosted runner	Executes the GitHub Actions commands
+
+So if an interviewer asks:
+
+"Why did you use a self-hosted GitHub Actions runner?"
+
+A good answer is:
+
+"The Kubernetes cluster was running in a private network, so I used a self-hosted GitHub Actions runner inside the environment. This allowed the pipeline to execute Docker and kubectl commands against the private Kubernetes cluster without exposing the Kubernetes API publicly."
+
+That is the main reason.
