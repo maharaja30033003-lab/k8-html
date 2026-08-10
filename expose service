@@ -1,0 +1,1559 @@
+# Kubernetes NGINX Ingress – Complete Setup & Troubleshooting Guide
+
+## Environment
+
+Kubernetes cluster:
+
+```text
+Master:
+  k8-m1
+  Private IP: 10.0.0.4
+
+Worker:
+  k8-worker
+  Private IP: 10.0.0.5
+```
+
+Pod network:
+
+```text
+Calico Pod CIDR: 192.168.0.0/16
+```
+
+Calico configuration:
+
+```text
+IPIP mode: Always
+VXLAN: Never
+```
+
+Ingress controller:
+
+```text
+Namespace: ingress-nginx
+Ingress Class: nginx
+Controller Pod:
+  ingress-nginx-controller-69f6c6b89d-gttpx
+
+Controller Pod IP:
+  192.168.125.76
+
+Node:
+  k8-worker
+```
+
+Application:
+
+```text
+Deployment: html-app
+Service: html-service
+Service port: 80
+Pods:
+  192.168.125.70:80
+  192.168.125.69:80
+```
+
+Public IP:
+
+```text
+20.15.171.215
+```
+
+---
+
+# 1. Initial Application
+
+The HTML application was already running in Kubernetes.
+
+Check:
+
+```bash
+kubectl get pods -o wide
+```
+
+The application pods were:
+
+```text
+192.168.125.70
+192.168.125.69
+```
+
+Service:
+
+```bash
+kubectl get svc
+```
+
+The application service was:
+
+```text
+html-service
+```
+
+with port:
+
+```text
+80
+```
+
+The service was successfully forwarding traffic to the HTML pods.
+
+---
+
+# 2. NGINX Ingress Controller
+
+We installed/used the NGINX Ingress Controller.
+
+Check:
+
+```bash
+kubectl get pods -n ingress-nginx -o wide
+```
+
+Result:
+
+```text
+ingress-nginx-controller-69f6c6b89d-gttpx
+1/1 Running
+IP: 192.168.125.76
+NODE: k8-worker
+```
+
+IngressClass:
+
+```bash
+kubectl get ingressclass
+```
+
+Result:
+
+```text
+NAME    CONTROLLER
+nginx   k8s.io/ingress-nginx
+```
+
+Therefore Kubernetes recognized:
+
+```text
+Ingress Class = nginx
+```
+
+---
+
+# 3. Initial Ingress Configuration
+
+The first Ingress used a hostname:
+
+```yaml
+host: html.local
+```
+
+The backend was:
+
+```text
+html-service:80
+```
+
+The Ingress looked conceptually like:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: html-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: html.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: html-service
+            port:
+              number: 80
+```
+
+---
+
+# 4. First 404 Problem
+
+When accessing:
+
+```text
+http://20.15.171.215
+```
+
+we received:
+
+```text
+404 Not Found
+nginx
+```
+
+The reason was the hostname rule.
+
+The Ingress expected:
+
+```http
+Host: html.local
+```
+
+But Chrome accessing the IP sends approximately:
+
+```http
+Host: 20.15.171.215
+```
+
+Therefore:
+
+```text
+Host: 20.15.171.215
+        |
+        v
+NGINX Ingress
+        |
+        X
+No matching host rule
+        |
+        v
+404 Not Found
+```
+
+---
+
+# 5. Testing With Host Header
+
+We tested:
+
+```bash
+curl -v -H "Host: html.local" http://20.15.171.215
+```
+
+This is an important troubleshooting technique.
+
+It allows us to access the public IP while manually supplying the hostname expected by the Ingress.
+
+At one point this successfully reached:
+
+```text
+html-service
+```
+
+and the NGINX logs showed:
+
+```text
+GET / HTTP/1.1" 200
+[default-html-service-80]
+192.168.125.70:80
+```
+
+This proved that:
+
+```text
+Internet
+   |
+   v
+NGINX
+   |
+   v
+html-service
+   |
+   v
+HTML Pod
+```
+
+was fundamentally working.
+
+---
+
+# 6. Problem With Updating the Ingress
+
+We tried to remove the hostname requirement using:
+
+```bash
+kubectl patch ingress html-ingress --type=json \
+-p='[{"op":"remove","path":"/spec/rules/0/host"}]'
+```
+
+But Kubernetes returned:
+
+```text
+failed calling webhook
+"validate.nginx.ingress.kubernetes.io"
+
+context deadline exceeded
+```
+
+The same thing happened with:
+
+```bash
+kubectl apply -f html-ingress.yaml
+```
+
+Error:
+
+```text
+Internal error occurred:
+failed calling webhook
+"validate.nginx.ingress.kubernetes.io"
+
+Post:
+https://ingress-nginx-controller-admission.ingress-nginx.svc:443/...
+
+context deadline exceeded
+```
+
+This was a **Kubernetes admission webhook problem**, not an application problem.
+
+---
+
+# 7. Investigating the Admission Webhook
+
+We checked:
+
+```bash
+kubectl get validatingwebhookconfiguration
+```
+
+Result:
+
+```text
+ingress-nginx-admission
+```
+
+Then:
+
+```bash
+kubectl get svc -n ingress-nginx \
+ingress-nginx-controller-admission -o wide
+```
+
+Result:
+
+```text
+NAME
+ingress-nginx-controller-admission
+
+TYPE
+ClusterIP
+
+CLUSTER-IP
+10.107.49.47
+
+PORT
+443
+```
+
+We checked the EndpointSlice:
+
+```bash
+kubectl get endpointslice -n ingress-nginx \
+-l kubernetes.io/service-name=ingress-nginx-controller-admission
+```
+
+Result:
+
+```text
+ENDPOINTS
+192.168.125.76
+
+PORT
+8443
+```
+
+Therefore:
+
+```text
+Admission Service
+10.107.49.47:443
+        |
+        v
+192.168.125.76:8443
+```
+
+was the expected path.
+
+---
+
+# 8. Testing the Admission Service From Master
+
+We created a temporary BusyBox pod on the master:
+
+```bash
+kubectl run webhook-test --rm -it \
+  --image=busybox:1.36 \
+  --restart=Never \
+  --overrides='{"spec":{"nodeName":"k8-m1"}}' -- \
+  nc -vz -w 5 10.107.49.47 443
+```
+
+Result:
+
+```text
+nc: 10.107.49.47 (10.107.49.47:443):
+Connection timed out
+```
+
+So the master could not reach the admission Service.
+
+---
+
+# 9. Testing the Controller Pod Directly
+
+We tested:
+
+```bash
+kubectl run webhook-direct --rm -it \
+  --image=busybox:1.36 \
+  --restart=Never \
+  --overrides='{"spec":{"nodeName":"k8-m1"}}' -- \
+  nc -vz -w 5 192.168.125.76 8443
+```
+
+Result:
+
+```text
+Connection timed out
+```
+
+This confirmed the problem was not simply Kubernetes Service routing.
+
+The master could not reach:
+
+```text
+192.168.125.76:8443
+```
+
+---
+
+# 10. Testing From Worker
+
+We then tested directly from the worker node.
+
+On `k8-worker`:
+
+```bash
+curl -vk --connect-timeout 5 \
+https://192.168.125.76:8443
+```
+
+This successfully connected:
+
+```text
+Connected to 192.168.125.76 port 8443
+```
+
+TLS negotiation also succeeded.
+
+The response was:
+
+```text
+HTTP/1.1 400 Bad Request
+```
+
+This is actually useful.
+
+It means:
+
+```text
+TCP connection = WORKING
+TLS = WORKING
+Webhook server = RUNNING
+```
+
+The `400 Bad Request` was expected because we were sending a normal HTTP request instead of the Kubernetes AdmissionReview payload.
+
+We also tested:
+
+```bash
+ping -c 3 192.168.125.76
+```
+
+from the worker:
+
+```text
+3 packets transmitted
+3 received
+0% packet loss
+```
+
+So the worker could reach the controller pod.
+
+---
+
+# 11. Calico Investigation
+
+Because the controller pod IP was:
+
+```text
+192.168.125.76
+```
+
+we checked Calico.
+
+```bash
+kubectl get pods -n kube-system -o wide | grep calico-node
+```
+
+Result:
+
+```text
+calico-node-57g4d
+10.0.0.4
+k8-m1
+
+calico-node-tjk22
+10.0.0.5
+k8-worker
+```
+
+Both Calico nodes were:
+
+```text
+1/1 Running
+```
+
+We checked Felix:
+
+```bash
+kubectl get felixconfiguration default -o yaml
+```
+
+Relevant configuration:
+
+```text
+bpfConnectTimeLoadBalancing: TCP
+bpfHostNetworkedNATWithoutCTLB: Enabled
+floatingIPs: Disabled
+```
+
+We checked the IPPool:
+
+```bash
+kubectl get ippools.crd.projectcalico.org -o yaml
+```
+
+Important values:
+
+```text
+cidr: 192.168.0.0/16
+ipipMode: Always
+vxlanMode: Never
+natOutgoing: true
+```
+
+Therefore Calico was using:
+
+```text
+IP-in-IP
+```
+
+for pod-to-pod traffic.
+
+---
+
+# 12. Calico Routing Investigation
+
+On the master:
+
+```bash
+ip route | grep 192.168
+```
+
+We found:
+
+```text
+192.168.125.64/26 via 10.0.0.5 dev tunl0 proto bird onlink
+```
+
+This is important.
+
+It means the master was routing traffic for the worker's pod CIDR through:
+
+```text
+tunl0
+   |
+   v
+10.0.0.5
+```
+
+Calico was therefore creating the expected IPIP route.
+
+We also saw:
+
+```text
+blackhole 192.168.167.192/26 proto bird
+```
+
+and individual Calico interfaces:
+
+```text
+192.168.167.193 dev cali...
+192.168.167.194 dev cali...
+192.168.167.195 dev cali...
+```
+
+These were Calico workload interfaces.
+
+---
+
+# 13. Reverse Path Filtering Investigation
+
+We checked:
+
+```bash
+sysctl net.ipv4.conf.all.rp_filter
+sysctl net.ipv4.conf.tunl0.rp_filter
+sysctl net.ipv4.conf.default.rp_filter
+```
+
+Initially:
+
+```text
+all.rp_filter = 0
+tunl0.rp_filter = 1
+default.rp_filter = 1
+```
+
+Because Calico IPIP can be affected by strict reverse-path filtering, we temporarily changed:
+
+```bash
+sudo sysctl -w net.ipv4.conf.tunl0.rp_filter=0
+sudo sysctl -w net.ipv4.conf.default.rp_filter=0
+```
+
+We retested:
+
+```bash
+curl -vk --connect-timeout 5 \
+https://192.168.125.76:8443
+```
+
+It still timed out from the master.
+
+Therefore:
+
+```text
+rp_filter
+```
+
+was not the final cause of the browser 404.
+
+This was an important troubleshooting lesson:
+
+> Do not keep changing networking parameters after the evidence shows that the actual application problem is elsewhere.
+
+---
+
+# 14. Azure NSG Investigation
+
+The Kubernetes nodes were Azure VMs.
+
+We checked which NSG was attached to each NIC.
+
+Master:
+
+```bash
+az network nic list -g dev \
+--query "[?contains(name,'k8-m1')].{NIC:name,NSG:networkSecurityGroup.id}" \
+-o table
+```
+
+Result:
+
+```text
+k8-m1515_z1
+k8-m1-nsg
+```
+
+Worker:
+
+```bash
+az network nic list -g dev \
+--query "[?contains(name,'k8-worker')].{NIC:name,NSG:networkSecurityGroup.id}" \
+-o table
+```
+
+Result:
+
+```text
+k8-worker341_z1
+k8workernsg746
+```
+
+---
+
+# 15. Existing NSG Rules
+
+Master NSG:
+
+```bash
+az network nsg rule list \
+-g dev \
+--nsg-name k8-m1-nsg \
+-o table
+```
+
+Initially it contained:
+
+```text
+SSH
+TCP
+Inbound
+Port 22
+```
+
+Worker NSG:
+
+```bash
+az network nsg rule list \
+-g dev \
+--nsg-name k8workernsg746 \
+-o table
+```
+
+Contained:
+
+```text
+SSH
+Allow-K8s-Ingress-31347
+```
+
+The NodePort rule was:
+
+```text
+TCP 31347
+Source: Internet
+```
+
+---
+
+# 16. Attempted Calico IPIP NSG Rule
+
+We tried:
+
+```bash
+az network nsg rule create \
+-g dev \
+--nsg-name k8-m1-nsg \
+-n Allow-Calico-IPIP \
+--priority 400 \
+--direction Inbound \
+--access Allow \
+--protocol 4 \
+--source-address-prefixes 10.0.0.0/24 \
+--destination-address-prefixes 10.0.0.0/24
+```
+
+Azure CLI rejected:
+
+```text
+'4' is not a valid value for --protocol
+```
+
+Azure CLI accepts:
+
+```text
+*
+Ah
+Esp
+Icmp
+Tcp
+Udp
+```
+
+This is an Azure CLI syntax limitation.
+
+For protocol number 4, Azure CLI expects the protocol name:
+
+```text
+Ipip
+```
+
+where supported by the CLI/API version, or the appropriate Azure networking mechanism rather than the raw Linux protocol number.
+
+---
+
+# 17. Effective NSG Investigation
+
+The correct command in this Azure CLI version was:
+
+```bash
+az network nic list-effective-nsg \
+-g dev \
+-n k8-m1515_z1 \
+-o json
+```
+
+and:
+
+```bash
+az network nic list-effective-nsg \
+-g dev \
+-n k8-worker341_z1 \
+-o json
+```
+
+Important worker NSG rules included:
+
+```text
+Allow-K8s-Ingress-31347
+priority 310
+TCP
+Inbound
+Internet -> port 31347
+```
+
+and:
+
+```text
+Allow-K8s-Node-Internal
+priority 400
+All
+Inbound
+VirtualNetwork -> VirtualNetwork
+0-65535
+```
+
+Azure's default rules also included:
+
+```text
+AllowVnetInBound
+AllowAzureLoadBalancerInBound
+DenyAllInBound
+```
+
+The important internal rule was:
+
+```text
+Allow-K8s-Node-Internal
+```
+
+which allowed VirtualNetwork traffic between the nodes.
+
+So Azure NSG was not the explanation for the final HTTP 404.
+
+---
+
+# 18. Important Discovery – Ingress Resource Disappeared
+
+At one point:
+
+```bash
+kubectl get ingress -A
+```
+
+returned:
+
+```text
+No resources found
+```
+
+This was a major clue.
+
+The NGINX controller itself was running:
+
+```bash
+kubectl get pods -n ingress-nginx -o wide
+```
+
+showed:
+
+```text
+ingress-nginx-controller-69f6c6b89d-gttpx
+1/1 Running
+192.168.125.76
+k8-worker
+```
+
+But there was no application Ingress resource.
+
+Therefore NGINX had no current application routing rule.
+
+That explains:
+
+```text
+404 Not Found
+```
+
+---
+
+# 19. NGINX Logs
+
+We checked:
+
+```bash
+kubectl logs -n ingress-nginx \
+deployment/ingress-nginx-controller \
+--tail=10
+```
+
+Earlier successful requests showed:
+
+```text
+GET / HTTP/1.1" 200
+[default-html-service-80]
+192.168.125.70:80
+```
+
+This proved NGINX could successfully route to:
+
+```text
+html-service
+```
+
+We also saw requests containing TLS handshake bytes:
+
+```text
+"\x16\x03..."
+```
+
+with:
+
+```text
+400
+```
+
+These were simply HTTPS/TLS requests hitting the HTTP listener and were not the root problem.
+
+We also saw:
+
+```text
+Configuration changes detected
+Backend successfully reloaded
+```
+
+which confirmed NGINX was dynamically reloading configuration.
+
+---
+
+# 20. Recreating the Ingress
+
+We recreated the Ingress.
+
+The important change was to remove the hostname restriction.
+
+Instead of:
+
+```yaml
+rules:
+- host: html.local
+```
+
+we used:
+
+```yaml
+rules:
+- http:
+    paths:
+    - path: /
+      pathType: Prefix
+      backend:
+        service:
+          name: html-service
+          port:
+            number: 80
+```
+
+Now:
+
+```bash
+kubectl get ingress
+```
+
+returned:
+
+```text
+NAME           CLASS   HOSTS   ADDRESS   PORTS
+html-ingress   nginx   *                 80
+```
+
+The critical value is:
+
+```text
+HOSTS *
+```
+
+This means the Ingress accepts requests regardless of the HTTP Host header.
+
+---
+
+# 21. Final Test
+
+We tested:
+
+```bash
+curl -v http://20.15.171.215
+```
+
+This now worked.
+
+Chrome also worked:
+
+```text
+http://20.15.171.215
+```
+
+Therefore the complete traffic path was finally:
+
+```text
+Browser
+   |
+   | HTTP :80
+   v
+Azure Public IP
+20.15.171.215
+   |
+   v
+NGINX Ingress Controller
+   |
+   | Ingress rule: *
+   v
+html-service:80
+   |
+   +------------------+
+   |                  |
+   v                  v
+Pod 192.168.125.70   Pod 192.168.125.69
+   |
+   v
+HTML application
+```
+
+---
+
+# 22. Final Root Cause
+
+There were several networking issues investigated during troubleshooting, but they were **not the final reason Chrome displayed 404**.
+
+The final HTTP 404 was caused by the Ingress routing configuration/state.
+
+### Original configuration
+
+```text
+Host = html.local
+```
+
+But Chrome accessed:
+
+```text
+http://20.15.171.215
+```
+
+Therefore:
+
+```text
+Host: 20.15.171.215
+```
+
+did not match:
+
+```text
+Host: html.local
+```
+
+NGINX returned:
+
+```text
+404 Not Found
+```
+
+At another point, the Ingress resource itself was absent:
+
+```text
+kubectl get ingress -A
+No resources found
+```
+
+which also caused NGINX to have no application routing rule.
+
+After recreating the Ingress with:
+
+```text
+HOSTS *
+```
+
+the request matched and reached the service.
+
+---
+
+# 23. What Was NOT the Final Problem
+
+We investigated these areas:
+
+### Calico
+
+Calico was running:
+
+```text
+calico-node master  = Running
+calico-node worker  = Running
+```
+
+Calico IPIP routes were present.
+
+### Pod networking
+
+Worker could directly reach:
+
+```text
+192.168.125.76:8443
+```
+
+and complete TLS.
+
+### NGINX controller
+
+Controller was:
+
+```text
+1/1 Running
+```
+
+and successfully routed requests to:
+
+```text
+html-service
+```
+
+### Azure NSG
+
+The effective NSG contained:
+
+```text
+Allow-K8s-Node-Internal
+VirtualNetwork -> VirtualNetwork
+All ports
+```
+
+So normal internal node communication was allowed.
+
+### rp_filter
+
+We tested disabling strict reverse-path filtering, but the master-to-controller timeout remained.
+
+Therefore it was not necessary for solving the final HTTP 404.
+
+### Chrome
+
+Chrome itself was not the problem.
+
+Chrome was simply sending:
+
+```text
+Host: 20.15.171.215
+```
+
+which did not match the original:
+
+```text
+html.local
+```
+
+host rule.
+
+---
+
+# 24. Admission Webhook Problem
+
+There was also a genuine separate problem:
+
+```text
+ingress-nginx-admission
+```
+
+The validating webhook was timing out.
+
+Error:
+
+```text
+failed calling webhook
+validate.nginx.ingress.kubernetes.io
+context deadline exceeded
+```
+
+The webhook service was:
+
+```text
+ingress-nginx-controller-admission
+```
+
+with:
+
+```text
+ClusterIP: 10.107.49.47
+Port: 443
+```
+
+and endpoint:
+
+```text
+192.168.125.76:8443
+```
+
+The master could not connect to that endpoint.
+
+This prevented commands such as:
+
+```bash
+kubectl apply -f html-ingress.yaml
+```
+
+and:
+
+```bash
+kubectl patch ingress ...
+```
+
+from completing.
+
+So there were actually **two different issues**:
+
+```text
+Issue 1:
+Ingress host/routing configuration
+        |
+        v
+HTTP 404
+
+Issue 2:
+NGINX admission webhook connectivity
+        |
+        v
+kubectl apply/patch fails
+```
+
+These should not be confused with each other.
+
+---
+
+# 25. Useful Troubleshooting Commands for Future
+
+## Check Ingress
+
+```bash
+kubectl get ingress -A
+```
+
+```bash
+kubectl describe ingress html-ingress
+```
+
+```bash
+kubectl get ingress html-ingress -o yaml
+```
+
+---
+
+## Check IngressClass
+
+```bash
+kubectl get ingressclass
+```
+
+Expected:
+
+```text
+nginx
+```
+
+---
+
+## Check NGINX Controller
+
+```bash
+kubectl get pods -n ingress-nginx -o wide
+```
+
+```bash
+kubectl logs -n ingress-nginx \
+deployment/ingress-nginx-controller \
+--tail=50
+```
+
+---
+
+## Check Service
+
+```bash
+kubectl get svc html-service
+```
+
+```bash
+kubectl get endpoints html-service
+```
+
+or:
+
+```bash
+kubectl get endpointslice \
+-l kubernetes.io/service-name=html-service
+```
+
+---
+
+## Test application directly
+
+From a node:
+
+```bash
+curl http://<POD-IP>:80
+```
+
+Example:
+
+```bash
+curl http://192.168.125.70:80
+```
+
+If this works, the application itself is healthy.
+
+---
+
+## Test Service
+
+```bash
+curl http://<SERVICE-IP>:80
+```
+
+or from inside the cluster:
+
+```bash
+kubectl run test --rm -it \
+--image=curlimages/curl -- \
+curl http://html-service:80
+```
+
+---
+
+## Test Ingress with Host
+
+If the Ingress uses:
+
+```text
+host: html.local
+```
+
+test:
+
+```bash
+curl -v \
+-H "Host: html.local" \
+http://20.15.171.215
+```
+
+If the Ingress uses:
+
+```text
+host: *
+```
+
+test simply:
+
+```bash
+curl -v http://20.15.171.215
+```
+
+---
+
+# 26. If Using html.local Later
+
+If you want:
+
+```text
+http://html.local
+```
+
+from your Windows PC, you need DNS resolution.
+
+For a lab, you can add this to Windows:
+
+```text
+C:\Windows\System32\drivers\etc\hosts
+```
+
+Add:
+
+```text
+20.15.171.215 html.local
+```
+
+Then the browser can use:
+
+```text
+http://html.local
+```
+
+The Ingress can then use:
+
+```yaml
+host: html.local
+```
+
+This is different from using:
+
+```text
+HOSTS *
+```
+
+---
+
+# 27. Recommended Simple Lab Configuration
+
+For this practice cluster, the easiest configuration is:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: html-ingress
+spec:
+  ingressClassName: nginx
+  rules:
+  - http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: html-service
+            port:
+              number: 80
+```
+
+Then:
+
+```bash
+kubectl apply -f html-ingress.yaml
+```
+
+Check:
+
+```bash
+kubectl get ingress
+```
+
+Expected:
+
+```text
+NAME           CLASS   HOSTS   ADDRESS   PORTS
+html-ingress   nginx   *                 80
+```
+
+Test:
+
+```bash
+curl -v http://20.15.171.215
+```
+
+Then open:
+
+```text
+http://20.15.171.215
+```
+
+in Chrome.
+
+---
+
+# 28. The Most Important Lesson
+
+When you see:
+
+```text
+404 Not Found
+nginx
+```
+
+do not immediately assume:
+
+```text
+Calico problem
+NSG problem
+Pod networking problem
+Chrome problem
+```
+
+First check:
+
+```bash
+kubectl get ingress
+kubectl describe ingress <name>
+```
+
+Then verify:
+
+```text
+1. Does the Ingress exist?
+2. Is the correct IngressClass used?
+3. Does the Host match?
+4. Does the Path match?
+5. Does the backend Service exist?
+6. Does the Service have endpoints?
+7. Can NGINX reach the Service?
+8. Check NGINX controller logs.
+```
+
+A very useful test is:
+
+```bash
+curl -v -H "Host: <hostname>" http://<public-ip>
+```
+
+This separates **DNS/hostname problems** from **Ingress routing problems**.
+
+---
+
+# Final Working Architecture
+
+```text
+                         INTERNET
+                             |
+                             |
+                    20.15.171.215:80
+                             |
+                             v
+                +-------------------------+
+                | NGINX Ingress Controller|
+                |                         |
+                |  Ingress Class: nginx   |
+                |  Host: *                 |
+                |  Path: /                 |
+                +------------+------------+
+                             |
+                             |
+                     html-service:80
+                             |
+                    +--------+--------+
+                    |                 |
+                    v                 v
+              HTML Pod 1         HTML Pod 2
+           192.168.125.70      192.168.125.69
+                    |                 |
+                    +--------+--------+
+                             |
+                             v
+                       HTML Website
+```
+
+## Final status
+
+```text
+Application                  WORKING
+Pods                         WORKING
+Service                      WORKING
+NGINX Controller              WORKING
+IngressClass                  WORKING
+Ingress                       WORKING
+Calico                        WORKING
+Azure NSG internal traffic    WORKING
+Public IP                     WORKING
+Chrome                        WORKING
+```
+
+The **main 404 cause was the Ingress Host/routing configuration**, while the **admission webhook timeout was a separate Kubernetes control-plane/webhook connectivity issue that made modifying the Ingress difficult**.
