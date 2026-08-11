@@ -1,0 +1,14 @@
+This is particularly useful for your Cloud Architect vs Platform Architect interview discussions.
+
+Area	Cloud Architect	Platform Team	Security Team	Application Team
+Landing Zone design	Own/define	Implement	Review	Consume
+Account strategy	Define	Implement	Review	Request
+VPC architecture	Design	Implement	Review	Consume
+IAM model	Define	Implement	Govern	Use
+SCP strategy	Define	Implement	Govern	—
+Security controls	Define	Implement	Own/Govern	Follow
+CI/CD platform	Define	Build	Review	Use
+EKS platform	Architecture	Build/manage	Secure	Deploy apps
+Application	Review	Platform support	Security review	Own
+DR	Define	Implement	Review	Validate
+Cost	Define standards	Optimize platform	—	Optimize workload
