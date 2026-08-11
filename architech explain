@@ -1,0 +1,973 @@
+1. Start with this definition
+
+“As an AWS Cloud Architect, my responsibility is to translate business and application requirements into a secure, scalable, highly available, resilient, and cost-optimized AWS architecture. I work across networking, compute, storage, databases, security, IAM, monitoring, automation, disaster recovery, governance, and operational processes.
+
+I don't necessarily implement every component myself. My primary responsibility is to make the architectural decisions, define standards and patterns, review implementation, identify risks and dependencies, and ensure that the final solution meets business requirements.”
+
+That opening immediately sounds more like an Architect than a senior AWS administrator.
+
+2. Requirement Gathering
+
+The architect's work starts before AWS services are selected.
+
+I first understand:
+
+Business requirements
+What is the application?
+Who are the users?
+How critical is it?
+What is the expected traffic?
+What is the business impact if it goes down?
+What are the compliance requirements?
+What is the budget?
+Is it global or regional?
+Technical requirements
+
+I identify:
+
+Availability requirements
+Performance requirements
+Scalability requirements
+Security requirements
+RTO
+RPO
+Data residency
+Integration requirements
+Backup requirements
+Monitoring requirements
+
+For example:
+
+“If the application requires 99.99% availability, 15-minute RPO and 1-hour RTO, I cannot simply deploy one EC2 instance in one Availability Zone. Those requirements directly influence my architecture.”
+
+3. AWS Landing Zone / Account Architecture
+
+At enterprise level, I don't normally put everything into one AWS account.
+
+I design a multi-account architecture.
+
+For example:
+
+AWS Organization
+│
+├── Management Account
+│
+├── Security Account
+│
+├── Log Archive Account
+│
+├── Network Account
+│
+├── Shared Services Account
+│
+├── Development Account
+│
+├── Test Account
+│
+├── Production Account
+│
+└── DR Account
+
+Then I define:
+
+AWS Organizations
+OUs
+Service Control Policies
+IAM Identity Center
+Centralized logging
+Security services
+Guardrails
+Account provisioning
+Network connectivity
+Billing structure
+
+This is where AWS Control Tower / Landing Zone concepts come into the architecture.
+
+The objective is:
+
+Separate environments, reduce blast radius, enforce governance, and provide centralized security and operations.
+
+4. AWS Networking Architecture
+
+This is one of the most important responsibilities.
+
+I design the overall network rather than simply creating a VPC.
+
+For example:
+
+                    Internet
+                       │
+                    Route 53
+                       │
+                    CloudFront
+                       │
+                     AWS WAF
+                       │
+                      ALB
+                       │
+          ┌────────────┴────────────┐
+          │                         │
+       AZ-1                       AZ-2
+          │                         │
+     Private Subnet             Private Subnet
+          │                         │
+       EC2/EKS                  EC2/EKS
+          │                         │
+          └────────────┬────────────┘
+                       │
+                    Database
+                  Multi-AZ
+
+I decide:
+
+VPC design
+CIDR ranges
+Public/private subnet strategy
+Availability Zones
+Route tables
+Internet Gateway
+NAT Gateway
+VPC endpoints
+Security Groups
+Network ACLs
+DNS
+DHCP options
+Connectivity
+
+If multiple VPCs exist:
+
+VPC A
+  │
+  ├── VPC Peering
+  │
+  ├── Transit Gateway
+  │
+  └── PrivateLink
+
+I select the appropriate technology based on requirements.
+
+For example:
+
+VPC Peering
+
+Good for simple one-to-one connectivity.
+
+Transit Gateway
+
+Better for many VPCs and centralized network architecture.
+
+PrivateLink
+
+Useful when one application/service needs to privately expose a service to consumers without providing broad network connectivity.
+
+5. Internet and Application Traffic Architecture
+
+I determine how users reach applications.
+
+For example:
+
+User
+ │
+Route 53
+ │
+CloudFront
+ │
+WAF
+ │
+ALB
+ │
+Target Group
+ │
+EC2 / ECS / EKS
+
+I decide:
+
+DNS strategy
+TLS termination
+WAF
+CDN
+Load balancing
+Public/private architecture
+Health checks
+Routing
+Security controls
+
+I also decide between:
+
+ALB
+
+For:
+
+HTTP
+HTTPS
+Layer 7 routing
+Path-based routing
+Host-based routing
+NLB
+
+For:
+
+TCP
+UDP
+TLS
+High-performance Layer 4 applications
+
+The architect's responsibility is not memorizing the services. It is choosing the correct service based on requirements.
+
+6. Compute Architecture
+
+I determine which compute platform is appropriate.
+
+Possible choices:
+
+EC2
+ECS
+EKS
+Lambda
+Fargate
+Batch
+
+For example:
+
+Traditional application
+
+EC2 + Auto Scaling Group
+
+Container application
+
+ECS/EKS
+
+Event-driven application
+
+Lambda
+
+Kubernetes requirement
+
+EKS
+
+I consider:
+
+CPU
+Memory
+Application architecture
+Scaling
+Licensing
+Operational complexity
+Cost
+Availability
+7. High Availability
+
+One of the most important architectural responsibilities.
+
+I don't design:
+
+EC2 → single AZ
+
+if the application requires high availability.
+
+Instead:
+
+                ALB
+              /     \
+             /       \
+           AZ-1      AZ-2
+            │          │
+           EC2        EC2
+            │          │
+            └────┬─────┘
+                 │
+              RDS Multi-AZ
+
+I make sure there is no unnecessary single point of failure.
+
+I review:
+
+EC2
+Load Balancers
+Database
+NAT
+Storage
+DNS
+Network connectivity
+Application dependencies
+8. Scalability Architecture
+
+I determine whether the application requires:
+
+Vertical scaling
+
+Increase:
+
+t3.medium
+   ↓
+t3.large
+   ↓
+t3.xlarge
+
+or:
+
+Horizontal scaling
+       ALB
+     /  |  \
+   EC2 EC2 EC2
+
+For cloud-native architecture, I generally prefer horizontal scalability where appropriate.
+
+I design:
+
+Auto Scaling Groups
+Target tracking
+Scheduled scaling
+Application scaling
+Database scaling
+Caching
+CDN
+Queue-based architecture
+9. Database Architecture
+
+I don't simply choose RDS because "database = RDS."
+
+I first understand the workload.
+
+For example:
+
+Relational
+RDS
+Aurora
+NoSQL
+DynamoDB
+Caching
+ElastiCache
+Data warehouse
+Redshift
+Object storage
+S3
+
+I consider:
+
+Read/write pattern
+Transaction requirements
+Data size
+Performance
+Availability
+Backup
+Recovery
+Replication
+Cost
+
+For RDS, I might design:
+
+              Application
+                   │
+             RDS/Aurora
+               /     \
+          Primary    Standby
+             AZ-1      AZ-2
+
+For read-heavy workloads:
+
+             Application
+                  │
+              DB Cluster
+              /       \
+         Writer       Reader
+10. Storage Architecture
+
+I select storage based on workload.
+
+S3
+
+For:
+
+Objects
+Backups
+Logs
+Static content
+Data lakes
+EBS
+
+For:
+
+EC2 block storage
+EFS
+
+For:
+
+Shared file systems
+FSx
+
+For specialized file-system workloads.
+
+I also design:
+
+Encryption
+Lifecycle policies
+Versioning
+Replication
+Backup
+Retention
+11. Security Architecture
+
+Security is not something added at the end.
+
+I follow:
+
+Security by design.
+
+I define:
+
+Identity
+IAM
+IAM Identity Center
+Roles
+Policies
+Least privilege
+MFA
+Network security
+Security Groups
+NACL
+WAF
+Network Firewall
+Private subnets
+Data security
+KMS
+Encryption at rest
+TLS
+Secrets Manager
+Parameter Store
+Detection
+CloudTrail
+GuardDuty
+Security Hub
+Config
+
+I also define:
+
+Human
+  ↓
+SSO
+  ↓
+IAM Role
+  ↓
+AWS Account
+  ↓
+Resource
+
+rather than allowing administrators to use permanent access keys.
+
+12. IAM Architecture
+
+This is another major architect responsibility.
+
+I design:
+
+Corporate AD / Entra ID
+          │
+          ↓
+IAM Identity Center
+          │
+          ↓
+AWS Accounts
+          │
+          ↓
+Permission Sets
+
+I define who can:
+
+Administer infrastructure
+Deploy applications
+Read logs
+Access production
+Access databases
+Manage networking
+
+The principle is:
+
+Least privilege + separation of duties.
+
+13. Disaster Recovery
+
+For critical applications, I design DR based on:
+
+RTO
+
+How quickly must the service be restored?
+
+RPO
+
+How much data can we afford to lose?
+
+For example:
+
+RPO = 15 minutes
+
+means:
+
+We should not lose more than approximately 15 minutes of data.
+
+RTO = 1 hour
+
+means:
+
+The application should be restored within one hour.
+
+Then I choose the appropriate DR strategy:
+
+Backup & Restore
+        ↓
+Pilot Light
+        ↓
+Warm Standby
+        ↓
+Multi-Site Active/Active
+
+The more aggressive the RTO/RPO, generally the more infrastructure and cost are required.
+
+14. Multi-Region Architecture
+
+For very critical workloads:
+
+             Route 53
+                │
+        ┌───────┴───────┐
+        │               │
+     Region A         Region B
+        │               │
+       ALB             ALB
+        │               │
+      App             App
+        │               │
+       DB  ←replication→ DB
+
+I decide whether multi-region is actually justified.
+
+I consider:
+
+Business criticality
+RTO/RPO
+Data replication
+Compliance
+Cost
+Operational complexity
+
+A good architect doesn't automatically choose multi-region just because it provides higher resilience.
+
+15. CI/CD and DevOps Architecture
+
+The architect also defines how applications move from source code to production.
+
+For example:
+
+Developer
+    │
+GitHub
+    │
+CI Pipeline
+    │
+Build
+    │
+Test
+    │
+Security Scan
+    │
+Docker Image
+    │
+ECR
+    │
+CD
+    │
+EKS
+
+I define:
+
+CI/CD architecture
+Infrastructure as Code
+Deployment strategy
+Environment separation
+Approval process
+Secrets management
+Rollback strategy
+
+Deployment strategies may include:
+
+Rolling
+Blue/Green
+Canary
+16. Infrastructure as Code
+
+At enterprise scale, I don't want engineers manually creating infrastructure.
+
+I define:
+
+Git
+ │
+Terraform
+ │
+AWS
+
+or:
+
+Git
+ │
+CloudFormation / CDK
+ │
+AWS
+
+I establish:
+
+Reusable modules
+State management
+Remote backend
+Environment separation
+Code review
+Version control
+Automated validation
+
+For Terraform:
+
+Developer
+   │
+Git PR
+   │
+terraform fmt
+terraform validate
+terraform plan
+   │
+Approval
+   │
+terraform apply
+17. Monitoring and Observability
+
+I define how we know whether the platform is healthy.
+
+Typical architecture:
+
+Applications
+    │
+    ├── Metrics
+    ├── Logs
+    └── Traces
+          │
+          ↓
+CloudWatch / Prometheus / Grafana
+
+I define monitoring for:
+
+CPU
+Memory
+Network
+Application errors
+Latency
+Availability
+Database performance
+Kubernetes
+Infrastructure
+
+And more importantly:
+
+What should generate an alert and who should receive it?
+
+Not every CloudWatch metric needs an alert.
+
+18. Cost Optimization
+
+An architect must consider cost from the beginning.
+
+I review:
+
+EC2 sizing
+Reserved Instances
+Savings Plans
+Spot
+Storage lifecycle
+S3 storage classes
+NAT Gateway costs
+Data transfer
+Idle resources
+Database sizing
+
+For example:
+
+Development
+    ↓
+Can run smaller instances
+
+Production
+    ↓
+HA + autoscaling
+
+Non-production
+    ↓
+Scheduled shutdown
+
+The goal isn't simply:
+
+"Make it cheap."
+
+The goal is:
+
+Optimize cost without violating business, performance, security, or availability requirements.
+
+19. Migration Architecture
+
+When moving an existing data center to AWS, I first assess:
+
+On-Prem
+   │
+   ├── Applications
+   ├── Databases
+   ├── Storage
+   ├── Network
+   └── Dependencies
+
+Then I classify workloads using the 7 Rs:
+
+Retire
+Retain
+Rehost
+Relocate
+Repurchase
+Replatform
+Refactor
+
+Then design:
+
+Data Center
+     │
+VPN / Direct Connect
+     │
+AWS
+     │
+Landing Zone
+     │
+Target Architecture
+
+I also plan:
+
+Migration waves
+Dependency mapping
+Downtime
+Data migration
+Validation
+Rollback
+DR
+20. Governance
+
+At enterprise level, architects must ensure teams don't create AWS resources without controls.
+
+I define:
+
+AWS Organizations
+OUs
+SCPs
+IAM policies
+AWS Config
+Tagging
+Resource standards
+Region restrictions
+Encryption requirements
+Logging requirements
+
+Example:
+
+"Production accounts cannot create resources in unapproved regions."
+
+That's governance.
+
+21. Architecture Review
+
+This is an important part of an architect's job.
+
+Application teams may come to me and say:
+
+"We need to deploy this application on AWS."
+
+I review their proposed architecture.
+
+I ask:
+
+Is it highly available?
+Is the network secure?
+Is the database appropriate?
+Is there a single point of failure?
+How will it scale?
+What happens if an AZ fails?
+What happens if the region fails?
+How is data backed up?
+How is access controlled?
+How is it monitored?
+What is the RTO/RPO?
+What is the monthly cost?
+
+Then I provide architectural recommendations.
+
+22. Documentation
+
+I create architecture documentation such as:
+
+High-Level Design — HLD
+
+Shows:
+
+Users
+ ↓
+Route53
+ ↓
+CloudFront/WAF
+ ↓
+ALB
+ ↓
+Application
+ ↓
+Database
+Low-Level Design — LLD
+
+Contains:
+
+CIDRs
+Subnets
+Ports
+Security Groups
+Routes
+IAM roles
+Instance types
+Database configuration
+Deployment configuration
+
+I also maintain:
+
+Architecture diagrams
+Data-flow diagrams
+Network diagrams
+DR documents
+Runbooks
+Standards
+23. Working With Different Teams
+
+An AWS architect is usually not working alone.
+
+I coordinate with:
+
+Cloud Architecture
+       │
+ ┌─────┼──────┬─────────┐
+ │     │      │         │
+Network Security DevOps Application
+ │     │      │         │
+DB    SOC    SRE      Developers
+
+For example:
+
+Network team
+
+"I need connectivity between these VPCs."
+
+Security team
+
+"These workloads require encryption and restricted access."
+
+Application team
+
+"Application requires 10,000 requests/sec."
+
+Database team
+
+"Database requires Multi-AZ and read replicas."
+
+Then I bring these requirements together into one architecture.
+
+24. Architecture Decision Making
+
+This is probably the most important difference between an Engineer and an Architect.
+
+Suppose someone says:
+
+"We need Kubernetes."
+
+I don't immediately create EKS.
+
+I ask:
+
+Why Kubernetes?
+What problem are we solving?
+What is the operational model?
+What is the team skill level?
+What is the expected workload?
+Would ECS be simpler?
+Would Lambda be better?
+What is the cost?
+What are the HA requirements?
+
+Then I make the recommendation.
+
+Architect = decision maker based on requirements.
+
+25. Example: Complete AWS Architecture
+
+You can explain one end-to-end example in an interview.
+
+                         Internet
+                            │
+                         Route 53
+                            │
+                       CloudFront
+                            │
+                           WAF
+                            │
+                     Application Load
+                         Balancer
+                       /          \
+                    AZ-1          AZ-2
+                     │              │
+                   EKS            EKS
+                     │              │
+                     └──────┬───────┘
+                            │
+                       ElastiCache
+                            │
+                       RDS Aurora
+                       /         \
+                   AZ-1          AZ-2
+                            │
+                           S3
+
+Supporting services:
+
+IAM
+KMS
+Secrets Manager
+CloudTrail
+CloudWatch
+GuardDuty
+Security Hub
+AWS Config
+ECR
+Terraform
+CI/CD
+
+Then explain the decisions:
+
+"I designed the application across multiple Availability Zones to remove single-AZ dependency. Route 53 handles DNS, CloudFront provides CDN capabilities, WAF protects the application layer, and ALB distributes traffic across application workloads. The application runs on EKS with horizontal scaling. The database uses a highly available Aurora configuration. S3 is used for object storage. IAM provides least-privilege access, KMS provides encryption, CloudTrail provides audit logging, and CloudWatch provides operational monitoring."
+
+That is a strong architect-level answer.
+
+26. Your Role as a Cloud Architect
+
+Given your Linux + AWS/Azure + Kubernetes + Terraform background, you can position yourself like this:
+
+"My background started with Linux infrastructure and system administration, which gave me a strong foundation in operating systems, networking, storage, virtualization and troubleshooting. Over time I moved into cloud platforms and architecture, primarily AWS and Azure.
+
+As a Cloud Architect, I focus on designing end-to-end cloud solutions rather than only individual services. I work with business and application teams to understand requirements, then design the landing zone, account structure, networking, security, compute, storage, database, HA/DR, monitoring, automation and cost model.
+
+I use Infrastructure as Code such as Terraform and CloudFormation/Bicep, and I work with DevOps and platform teams on CI/CD and Kubernetes-based workloads. I also perform architecture reviews, identify single points of failure, define security and governance standards, and ensure the implementation follows the approved architecture.
+
+My responsibility continues beyond the initial design. I review scalability, resilience, security posture, operational readiness and cost optimization, and I make architectural changes as the business evolves."
+
+One sentence to remember for interviews
+
+Cloud Architect = Requirements + Architecture + Security + Networking + HA/DR + Scalability + Automation + Governance + Cost + Operational Excellence.
+
+And the key distinction:
+
+Cloud Engineer: "How do I implement this?"
+Cloud Architect: "Why should we implement it this way, what are the alternatives, what are the risks, and how does it satisfy the business requirement?"
